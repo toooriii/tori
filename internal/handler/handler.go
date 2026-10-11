@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	api "github.com/toooriii/tori/internal/generated"
 	"github.com/toooriii/tori/internal/model"
@@ -24,6 +25,7 @@ type Handler struct {
 	log          *slog.Logger
 	tx           TxManager
 	trips        *repository.TripRepository
+	idem         *repository.IdempotencyRepository
 	ping         func(ctx context.Context) error
 	queryTimeout time.Duration
 }
@@ -34,15 +36,16 @@ func New(
 	log *slog.Logger,
 	tx TxManager,
 	trips *repository.TripRepository,
+	idem *repository.IdempotencyRepository,
 	ping func(ctx context.Context) error,
 	queryTimeout time.Duration,
 ) *Handler {
-	return &Handler{log: log, tx: tx, trips: trips, ping: ping, queryTimeout: queryTimeout}
+	return &Handler{log: log, tx: tx, trips: trips, idem: idem, ping: ping, queryTimeout: queryTimeout}
 }
 
 func now() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }
 
-func (h *Handler) CreateTrip(w http.ResponseWriter, r *http.Request, _ api.CreateTripParams) {
+func (h *Handler) CreateTrip(w http.ResponseWriter, r *http.Request, params api.CreateTripParams) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
 		writeProblem(w, r, http.StatusBadRequest, "invalid_request", "cannot read request body")
@@ -68,19 +71,64 @@ func (h *Handler) CreateTrip(w http.ResponseWriter, r *http.Request, _ api.Creat
 	ctx, cancel := context.WithTimeout(r.Context(), h.queryTimeout)
 	defer cancel()
 
-	err = h.tx.Do(ctx, func(ctx context.Context) error {
+	if params.IdempotencyKey == nil {
+		err = h.tx.Do(ctx, func(ctx context.Context) error {
+			if err := h.trips.Create(ctx, trip); err != nil {
+				return err
+			}
+			return h.trips.AddHistory(ctx, trip.ID, nil, model.StatusActive, "trip created")
+		})
+		if err != nil {
+			h.fail(w, r, err)
+			return
+		}
+		w.Header().Set("Location", "/api/v1/trips/"+trip.ID.String())
+		writeJSON(w, http.StatusCreated, toAPI(trip))
+		return
+	}
+
+	key := uuid.UUID(*params.IdempotencyKey)
+	hash, err := hashBody(body)
+	if err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "invalid_request", "cannot hash request body")
+		return
+	}
+
+	createErr := h.tx.Do(ctx, func(ctx context.Context) error {
+		if err := h.idem.Save(ctx, key, hash, trip.ID); err != nil {
+			return err
+		}
 		if err := h.trips.Create(ctx, trip); err != nil {
 			return err
 		}
 		return h.trips.AddHistory(ctx, trip.ID, nil, model.StatusActive, "trip created")
 	})
-	if err != nil {
-		h.fail(w, r, err)
-		return
-	}
 
-	w.Header().Set("Location", "/api/v1/trips/"+trip.ID.String())
-	writeJSON(w, http.StatusCreated, toAPI(trip))
+	switch {
+	case createErr == nil:
+		w.Header().Set("Location", "/api/v1/trips/"+trip.ID.String())
+		writeJSON(w, http.StatusCreated, toAPI(trip))
+
+	case errors.Is(createErr, repository.ErrKeyAlreadyExists):
+		rec, getErr := h.idem.Get(ctx, key)
+		if getErr != nil {
+			h.fail(w, r, getErr)
+			return
+		}
+		if rec.RequestHash != hash {
+			h.fail(w, r, model.ErrIdempotencyConflict)
+			return
+		}
+		existing, getErr := h.trips.Get(ctx, rec.TripID)
+		if getErr != nil {
+			h.fail(w, r, getErr)
+			return
+		}
+		writeJSON(w, http.StatusOK, toAPI(existing))
+
+	default:
+		h.fail(w, r, createErr)
+	}
 }
 
 func (h *Handler) GetTrip(w http.ResponseWriter, r *http.Request, tripId api.TripId) {
@@ -155,6 +203,13 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeProblem(w, r, http.StatusConflict, "trip_completed", "Operation is not allowed for a completed trip")
 	case errors.Is(err, model.ErrDriverBusy):
 		writeProblem(w, r, http.StatusConflict, "driver_busy", "Driver already has an active trip")
+	case errors.Is(err, model.ErrIdempotencyConflict):
+		writeProblem(w, r, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used with a different request body")
+	case errors.Is(err, repository.ErrKeyAlreadyExists):
+		writeProblem(w, r, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used")
+	case errors.Is(err, pgx.ErrNoRows):
+		h.log.Error("unexpected no rows", "method", r.Method, "path", r.URL.Path, "error", err)
+		writeProblem(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
 	default:
 		h.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 		writeProblem(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")

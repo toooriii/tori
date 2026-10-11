@@ -9,11 +9,12 @@ import (
 )
 
 var problemTitles = map[string]string{
-	"invalid_request": "Invalid request",
-	"trip_not_found":  "Trip not found",
-	"trip_completed":  "Trip completed",
-	"driver_busy":     "Driver busy",
-	"internal_error":  "Internal Server Error",
+	"invalid_request":      "Invalid request",
+	"trip_not_found":       "Trip not found",
+	"trip_completed":       "Trip completed",
+	"driver_busy":          "Driver busy",
+	"internal_error":       "Internal Server Error",
+	"idempotency_conflict": "Idempotency conflict",
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

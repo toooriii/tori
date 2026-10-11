@@ -4,20 +4,20 @@ info:
   version: 1.1.0
   description: Кумулятивный контракт Trip Service начиная с лабораторной работы 2.
 servers:
-- url: http://localhost:8080
+  - url: http://localhost:8080
 tags:
-- name: Trips
-- name: Positions
-- name: Service
+  - name: Trips
+  - name: Positions
+  - name: Service
 paths:
   /api/v1/trips:
     post:
       tags:
-      - Trips
+        - Trips
       summary: Создать поездку
       operationId: createTrip
       parameters:
-      - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -55,11 +55,11 @@ paths:
   /api/v1/trips/{tripId}:
     get:
       tags:
-      - Trips
+        - Trips
       summary: Получить поездку
       operationId: getTrip
       parameters:
-      - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/TripId'
       responses:
         '200':
           description: Поездка
@@ -76,12 +76,12 @@ paths:
   /api/v1/trips/{tripId}/finish:
     post:
       tags:
-      - Trips
+        - Trips
       summary: Завершить поездку
       description: Переводит активную поездку в статус completed.
       operationId: finishTrip
       parameters:
-      - $ref: '#/components/parameters/TripId'
+        - $ref: '#/components/parameters/TripId'
       responses:
         '200':
           description: Поездка завершена
@@ -100,7 +100,7 @@ paths:
   /health:
     get:
       tags:
-      - Service
+        - Service
       summary: Liveness
       operationId: health
       responses:
@@ -113,7 +113,7 @@ paths:
   /ready:
     get:
       tags:
-      - Service
+        - Service
       summary: Readiness
       operationId: ready
       responses:
@@ -129,6 +129,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+  /api/v1/trips/{tripId}/positions:
+    post:
+      tags:
+        - Positions
+      summary: Сохранить координату поездки
+      operationId: createTripPosition
+      description: Координаты разрешено добавлять только в активную поездку.
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PositionData'
+            example:
+              coordinates:
+                latitude: 59.9343
+                longitude: 30.3351
+              recorded_at: '2026-09-01T10:05:00Z'
+      responses:
+        '201':
+          description: Координата сохранена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripPosition'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/TripNotFound'
+        '409':
+          $ref: '#/components/responses/TripCompleted'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags:
+        - Positions
+      summary: Получить маршрут поездки
+      operationId: listTripPositions
+      description: Возвращает все точки маршрута, отсортированные по recorded_at по возрастанию.
+      parameters:
+        - $ref: '#/components/parameters/TripId'
+      responses:
+        '200':
+          description: Маршрут
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripPositionsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/TripNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   parameters:
     IdempotencyKey:
@@ -157,8 +213,8 @@ components:
       additionalProperties: false
       description: Географические координаты WGS 84.
       required:
-      - latitude
-      - longitude
+        - latitude
+        - longitude
       properties:
         latitude:
           type: number
@@ -176,11 +232,11 @@ components:
       type: object
       additionalProperties: false
       required:
-      - user_id
-      - driver_id
-      - start_point
-      - end_point
-      - price
+        - user_id
+        - driver_id
+        - start_point
+        - end_point
+        - price
       properties:
         user_id:
           type: string
@@ -201,40 +257,40 @@ components:
     TripStatus:
       type: string
       enum:
-      - active
-      - completed
+        - active
+        - completed
     Trip:
       allOf:
-      - $ref: '#/components/schemas/TripData'
-      - type: object
-        additionalProperties: false
-        required:
-        - id
-        - status
-        - started_at
-        properties:
-          id:
-            type: string
-            format: uuid
-          status:
-            $ref: '#/components/schemas/TripStatus'
-          started_at:
-            type: string
-            format: date-time
-          finished_at:
-            type: string
-            format: date-time
-            nullable: true
-          last_position_at:
-            type: string
-            format: date-time
-            nullable: true
+        - $ref: '#/components/schemas/TripData'
+        - type: object
+          additionalProperties: false
+          required:
+            - id
+            - status
+            - started_at
+          properties:
+            id:
+              type: string
+              format: uuid
+            status:
+              $ref: '#/components/schemas/TripStatus'
+            started_at:
+              type: string
+              format: date-time
+            finished_at:
+              type: string
+              format: date-time
+              nullable: true
+            last_position_at:
+              type: string
+              format: date-time
+              nullable: true
     PositionData:
       type: object
       additionalProperties: false
       required:
-      - coordinates
-      - recorded_at
+        - coordinates
+        - recorded_at
       properties:
         coordinates:
           $ref: '#/components/schemas/Coordinates'
@@ -244,24 +300,24 @@ components:
           description: Время фиксации координаты на мобильном устройстве.
     TripPosition:
       allOf:
-      - $ref: '#/components/schemas/PositionData'
-      - type: object
-        additionalProperties: false
-        required:
-        - id
-        - trip_id
-        properties:
-          id:
-            type: integer
-            format: int64
-          trip_id:
-            type: string
-            format: uuid
+        - $ref: '#/components/schemas/PositionData'
+        - type: object
+          additionalProperties: false
+          required:
+            - id
+            - trip_id
+          properties:
+            id:
+              type: integer
+              format: int64
+            trip_id:
+              type: string
+              format: uuid
     TripPositionsResponse:
       type: object
       additionalProperties: false
       required:
-      - positions
+        - positions
       properties:
         positions:
           type: array
@@ -271,21 +327,21 @@ components:
       type: object
       additionalProperties: false
       required:
-      - status
+        - status
       properties:
         status:
           type: string
           enum:
-          - ok
-          - unavailable
+            - ok
+            - unavailable
     Problem:
       type: object
       description: Problem Details for HTTP APIs (RFC 9457) с дополнительным полем code.
       required:
-      - type
-      - title
-      - status
-      - code
+        - type
+        - title
+        - status
+        - code
       properties:
         type:
           type: string
