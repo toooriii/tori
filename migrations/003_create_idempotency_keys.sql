@@ -1,0 +1,13 @@
+-- +goose Up
+CREATE TABLE idempotency_keys (
+                                  key          UUID PRIMARY KEY,
+                                  request_hash TEXT NOT NULL,
+                                  trip_id      UUID NOT NULL REFERENCES trips(id) ON DELETE CASCADE
+                                      DEFERRABLE INITIALLY DEFERRED,
+                                  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idempotency_keys_created_at_idx ON idempotency_keys (created_at);
+
+-- +goose Down
+DROP TABLE idempotency_keys;
