@@ -4,15 +4,19 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/toooriii/tori/internal/domain/position"
 	"github.com/toooriii/tori/internal/domain/trip"
 	api "github.com/toooriii/tori/internal/generated"
 )
 
 func Problem(err error) (int, api.Problem) {
 	var ve *trip.ValidationError
+	var pve *position.ValidationError
 	switch {
 	case errors.As(err, &ve):
 		return http.StatusBadRequest, problem(http.StatusBadRequest, "invalid_request", ve.Error())
+	case errors.As(err, &pve):
+		return http.StatusBadRequest, problem(http.StatusBadRequest, "invalid_request", pve.Error())
 	case errors.Is(err, trip.ErrTripNotFound):
 		return http.StatusNotFound, problem(http.StatusNotFound, "trip_not_found", "Trip was not found")
 	case errors.Is(err, trip.ErrTripCompleted):

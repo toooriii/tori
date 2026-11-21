@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/toooriii/tori/internal/domain/position"
 	"github.com/toooriii/tori/internal/domain/trip"
 	"github.com/toooriii/tori/internal/http/domainerror"
 )
@@ -24,6 +25,7 @@ func TestProblem(t *testing.T) {
 		{name: "key exists", err: trip.ErrKeyAlreadyExists, wantStatus: 409, wantCode: "idempotency_conflict"},
 		{name: "internal hides details", err: errors.New("db exploded: SELECT * FROM users"), wantStatus: 500, wantCode: "internal_error"},
 		{name: "wrapped not found", err: errors.Join(trip.ErrTripNotFound, errors.New("ctx")), wantStatus: 404, wantCode: "trip_not_found"},
+		{name: "position validation", err: &position.ValidationError{Field: "coordinates.latitude", Message: "must be in [-90, 90]"}, wantStatus: 400, wantCode: "invalid_request"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

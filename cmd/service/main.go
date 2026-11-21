@@ -59,6 +59,8 @@ func run() error {
 	}
 	defer c.Close()
 
+	c.Positions.Start(ctx)
+
 	router := chi.NewRouter()
 	router.Use(mw.Recover(log))
 	router.Use(mw.Tracing())
@@ -68,10 +70,12 @@ func run() error {
 		Addr: cfg.HTTPAddr,
 		Handler: api.HandlerWithOptions(
 			&server{
-				create: c.CreateTrip,
-				get:    c.GetTrip,
-				finish: c.FinishTrip,
-				ping:   c.Ping,
+				create:    c.CreateTrip,
+				get:       c.GetTrip,
+				finish:    c.FinishTrip,
+				createPos: c.CreateTripPosition,
+				listPos:   c.ListTripPositions,
+				ping:      c.Ping,
 			},
 			api.ChiServerOptions{
 				BaseRouter:       router,
@@ -110,9 +114,12 @@ func run() error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
+
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("http shutdown", "error", err)
 	}
+
+	c.Positions.Stop(shutdownCtx)
 
 	log.Info("stopped")
 	return nil
@@ -128,7 +135,21 @@ type server struct {
 	finish interface {
 		FinishTrip(http.ResponseWriter, *http.Request, api.TripId)
 	}
+	createPos interface {
+		CreateTripPosition(http.ResponseWriter, *http.Request, api.TripId)
+	}
+	listPos interface {
+		ListTripPositions(http.ResponseWriter, *http.Request, api.TripId)
+	}
 	ping func(ctx context.Context) error
+}
+
+func (s *server) CreateTripPosition(w http.ResponseWriter, r *http.Request, id api.TripId) {
+	s.createPos.CreateTripPosition(w, r, id)
+}
+
+func (s *server) ListTripPositions(w http.ResponseWriter, r *http.Request, id api.TripId) {
+	s.listPos.ListTripPositions(w, r, id)
 }
 
 func (s *server) CreateTrip(w http.ResponseWriter, r *http.Request, params api.CreateTripParams) {

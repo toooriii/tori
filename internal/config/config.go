@@ -29,6 +29,7 @@ type Config struct {
 	IdleTimeout       time.Duration
 	Database          Database
 	Telemetry         Telemetry
+	Positions         Positions
 }
 
 type Telemetry struct {
@@ -37,6 +38,17 @@ type Telemetry struct {
 	OTLPProtocol  string
 	Sampler       string
 	ResourceAttrs string
+}
+
+type Positions struct {
+	CheckInterval time.Duration
+	StaleAfter    time.Duration
+	Workers       int
+	QueueSize     int
+	PushURL       string
+	PushTimeout   time.Duration
+	BatchSize     int
+	PriorityQueue bool
 }
 
 func Load() (Config, error) {
@@ -64,12 +76,32 @@ func Load() (Config, error) {
 			Sampler:       l.str("OTEL_TRACES_SAMPLER", "parentbased_always_on"),
 			ResourceAttrs: l.str("OTEL_RESOURCE_ATTRIBUTES", "service.namespace=tripgo,deployment.environment=local"),
 		},
+		Positions: Positions{
+			CheckInterval: l.dur("POSITION_CHECK_INTERVAL", 30*time.Second),
+			StaleAfter:    l.dur("POSITION_STALE_AFTER", 60*time.Second),
+			Workers:       l.int("POSITION_WORKERS", 4),
+			QueueSize:     l.int("POSITION_QUEUE_SIZE", 100),
+			PushURL:       l.required("PUSH_HTTP_URL"),
+			PushTimeout:   l.dur("PUSH_REQUEST_TIMEOUT", time.Second),
+			BatchSize:     l.int("POSITION_BATCH_SIZE", 0),
+			PriorityQueue: l.bool("POSITION_PRIORITY_QUEUE", false),
+		},
 	}
 
 	if s := os.Getenv("LOG_LEVEL"); s != "" {
 		if err := cfg.LogLevel.UnmarshalText([]byte(s)); err != nil {
 			l.errs = append(l.errs, fmt.Errorf("LOG_LEVEL: %w", err))
 		}
+	}
+
+	if cfg.Positions.Workers < 1 {
+		l.errs = append(l.errs, errors.New("POSITION_WORKERS must be >= 1"))
+	}
+	if cfg.Positions.QueueSize < 1 {
+		l.errs = append(l.errs, errors.New("POSITION_QUEUE_SIZE must be >= 1"))
+	}
+	if cfg.Positions.BatchSize < 0 {
+		l.errs = append(l.errs, errors.New("POSITION_BATCH_SIZE must be >= 0"))
 	}
 
 	if cfg.Database.MinConns < 0 || cfg.Database.MinConns > cfg.Database.MaxConns {
@@ -132,4 +164,17 @@ func (l *loader) int32Val(key string, def, min, max int) int32 {
 		return int32(def) //nolint:gosec
 	}
 	return int32(n) //nolint:gosec
+}
+
+func (l *loader) bool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		l.errs = append(l.errs, fmt.Errorf("%s: expected bool, got %q", key, v))
+		return def
+	}
+	return b
 }
