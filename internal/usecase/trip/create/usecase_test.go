@@ -30,7 +30,9 @@ func validInput() create.Input {
 }
 
 func txPassthrough() func(context.Context, func(context.Context) error) error {
-	return func(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }
+	return func(ctx context.Context, fn func(context.Context) error) error {
+		return fn(ctx)
+	}
 }
 
 func TestUseCase_Do_Success(t *testing.T) {
@@ -38,12 +40,12 @@ func TestUseCase_Do_Success(t *testing.T) {
 	trips := NewMocktripRepository(ctrl)
 	idem := NewMockidempotencyRepository(ctrl)
 	tx := NewMocktxManager(ctrl)
-
+	counter := NewMocktripCounter(ctrl)
 	tx.EXPECT().Do(gomock.Any(), gomock.Any()).DoAndReturn(txPassthrough())
 	trips.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 	trips.EXPECT().AddHistory(gomock.Any(), gomock.Any(), nil, "active", "trip created").Return(nil)
-
-	uc := create.New(trips, idem, tx)
+	counter.EXPECT().Add(gomock.Any(), int64(1)).Times(1)
+	uc := create.New(trips, idem, tx, counter)
 	out, err := uc.Do(context.Background(), validInput())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -61,11 +63,11 @@ func TestUseCase_Do_DriverBusy(t *testing.T) {
 	trips := NewMocktripRepository(ctrl)
 	idem := NewMockidempotencyRepository(ctrl)
 	tx := NewMocktxManager(ctrl)
+	counter := NewMocktripCounter(ctrl)
 
 	tx.EXPECT().Do(gomock.Any(), gomock.Any()).DoAndReturn(txPassthrough())
 	trips.EXPECT().Save(gomock.Any(), gomock.Any()).Return(trip.ErrDriverBusy)
-
-	uc := create.New(trips, idem, tx)
+	uc := create.New(trips, idem, tx, counter)
 	_, err := uc.Do(context.Background(), validInput())
 	if !errors.Is(err, trip.ErrDriverBusy) {
 		t.Fatalf("err = %v, want ErrDriverBusy", err)
@@ -74,7 +76,13 @@ func TestUseCase_Do_DriverBusy(t *testing.T) {
 
 func TestUseCase_Do_InvalidInput(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	uc := create.New(NewMocktripRepository(ctrl), NewMockidempotencyRepository(ctrl), NewMocktxManager(ctrl))
+
+	uc := create.New(
+		NewMocktripRepository(ctrl),
+		NewMockidempotencyRepository(ctrl),
+		NewMocktxManager(ctrl),
+		NewMocktripCounter(ctrl),
+	)
 
 	in := validInput()
 	in.Price = -1
@@ -93,6 +101,7 @@ func TestUseCase_Do_IdempotencyRepeat(t *testing.T) {
 	trips := NewMocktripRepository(ctrl)
 	idem := NewMockidempotencyRepository(ctrl)
 	tx := NewMocktxManager(ctrl)
+	counter := NewMocktripCounter(ctrl)
 
 	key := uuid.New()
 	in := validInput()
@@ -110,7 +119,7 @@ func TestUseCase_Do_IdempotencyRepeat(t *testing.T) {
 		ID: uuid.New(), Status: trip.StatusActive,
 	}, nil)
 
-	uc := create.New(trips, idem, tx)
+	uc := create.New(trips, idem, tx, counter)
 	out, err := uc.Do(context.Background(), in)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -125,6 +134,7 @@ func TestUseCase_Do_IdempotencyConflict(t *testing.T) {
 	trips := NewMocktripRepository(ctrl)
 	idem := NewMockidempotencyRepository(ctrl)
 	tx := NewMocktxManager(ctrl)
+	counter := NewMocktripCounter(ctrl)
 
 	key := uuid.New()
 	in := validInput()
@@ -134,8 +144,7 @@ func TestUseCase_Do_IdempotencyConflict(t *testing.T) {
 	idem.EXPECT().Get(gomock.Any(), key).Return(model.IdempotencyRecord{
 		Key: key, RequestHash: "different-hash",
 	}, nil)
-
-	uc := create.New(trips, idem, tx)
+	uc := create.New(trips, idem, tx, counter)
 	_, err := uc.Do(context.Background(), in)
 	if !errors.Is(err, trip.ErrIdempotencyConflict) {
 		t.Fatalf("err = %v, want ErrIdempotencyConflict", err)

@@ -5,26 +5,27 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/metric"
 
 	"github.com/toooriii/tori/internal/domain/trip"
 	"github.com/toooriii/tori/internal/model"
 )
 
-var tripsCompleted, _ = otel.Meter("trip-service/usecase").Int64Counter(
-	"tripgo.trips.completed",
-	metric.WithUnit("{trip}"),
-	metric.WithDescription("Completed trips"),
-)
-
 type UseCase struct {
-	trips tripRepository
-	tx    txManager
+	trips          tripRepository
+	tx             txManager
+	tripsCompleted tripCounter
 }
 
-func New(trips tripRepository, tx txManager) *UseCase {
-	return &UseCase{trips: trips, tx: tx}
+func New(
+	trips tripRepository,
+	tx txManager,
+	tripsCompleted tripCounter,
+) *UseCase {
+	return &UseCase{
+		trips:          trips,
+		tx:             tx,
+		tripsCompleted: tripsCompleted,
+	}
 }
 
 func (uc *UseCase) Do(ctx context.Context, id uuid.UUID, now time.Time) (model.Trip, error) {
@@ -47,7 +48,7 @@ func (uc *UseCase) Do(ctx context.Context, id uuid.UUID, now time.Time) (model.T
 	})
 
 	if err == nil {
-		tripsCompleted.Add(ctx, 1)
+		uc.tripsCompleted.Add(ctx, 1)
 	}
 
 	return out, err

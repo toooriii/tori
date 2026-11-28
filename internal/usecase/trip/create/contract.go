@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/toooriii/tori/internal/model"
 )
@@ -24,5 +25,9 @@ type (
 
 	txManager interface {
 		Do(ctx context.Context, fn func(ctx context.Context) error) error
+	}
+
+	tripCounter interface {
+		Add(ctx context.Context, value int64, options ...metric.AddOption)
 	}
 )

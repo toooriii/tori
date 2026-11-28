@@ -9,17 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/metric"
 
 	"github.com/toooriii/tori/internal/domain/trip"
 	"github.com/toooriii/tori/internal/model"
-)
-
-var tripsCreated, _ = otel.Meter("trip-service/usecase").Int64Counter(
-	"tripgo.trips.created",
-	metric.WithUnit("{trip}"),
-	metric.WithDescription("Created trips"),
 )
 
 type Input struct {
@@ -39,13 +31,24 @@ type Output struct {
 }
 
 type UseCase struct {
-	trips tripRepository
-	idem  idempotencyRepository
-	tx    txManager
+	trips        tripRepository
+	idem         idempotencyRepository
+	tx           txManager
+	tripsCreated tripCounter
 }
 
-func New(trips tripRepository, idem idempotencyRepository, tx txManager) *UseCase {
-	return &UseCase{trips: trips, idem: idem, tx: tx}
+func New(
+	trips tripRepository,
+	idem idempotencyRepository,
+	tx txManager,
+	tripsCreated tripCounter,
+) *UseCase {
+	return &UseCase{
+		trips:        trips,
+		idem:         idem,
+		tx:           tx,
+		tripsCreated: tripsCreated,
+	}
 }
 
 func (uc *UseCase) Do(ctx context.Context, in Input) (Output, error) {
@@ -74,7 +77,7 @@ func (uc *UseCase) Do(ctx context.Context, in Input) (Output, error) {
 			return Output{}, err
 		}
 
-		tripsCreated.Add(ctx, 1)
+		uc.tripsCreated.Add(ctx, 1)
 		return Output{Trip: mt}, nil
 	}
 
@@ -95,7 +98,7 @@ func (uc *UseCase) Do(ctx context.Context, in Input) (Output, error) {
 
 	switch {
 	case createErr == nil:
-		tripsCreated.Add(ctx, 1)
+		uc.tripsCreated.Add(ctx, 1)
 		return Output{Trip: mt}, nil
 
 	case errors.Is(createErr, trip.ErrKeyAlreadyExists):
