@@ -53,8 +53,8 @@ func New(
 }
 
 func (c *Component) Start(ctx context.Context) {
-	scanCtx, scanCancel := context.WithCancel(ctx)
-	workCtx, workCancel := context.WithCancel(ctx)
+	scanCtx, scanCancel := context.WithCancel(context.WithoutCancel(ctx))
+	workCtx, workCancel := context.WithCancel(context.WithoutCancel(scanCtx))
 	c.scanCancel = scanCancel
 	c.workCancel = workCancel
 	c.scanDone = make(chan struct{})
@@ -80,8 +80,8 @@ func (c *Component) Stop(ctx context.Context) {
 	select {
 	case <-c.scanDone:
 	case <-ctx.Done():
+		c.workCancel()
 	}
-
 	c.queue.Close()
 	select {
 	case <-c.workDone:
@@ -89,4 +89,6 @@ func (c *Component) Stop(ctx context.Context) {
 		c.workCancel()
 		<-c.workDone
 	}
+
+	c.workCancel()
 }

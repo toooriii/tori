@@ -53,48 +53,63 @@ func (s *scanner) tick(ctx context.Context) {
 	ctx, span := tracer.Start(ctx, "positions.scan")
 	defer span.End()
 
+	var rowsRead int
+	defer func() {
+		s.metrics.recordRowsRead(ctx, rowsRead)
+	}()
+
 	if s.batchSize > 0 {
-		s.tickBatches(ctx)
+		rowsRead = s.tickBatches(ctx)
 		return
 	}
-	s.tickAll(ctx)
+	rowsRead = s.tickAll(ctx)
 }
 
-func (s *scanner) tickAll(ctx context.Context) {
+func (s *scanner) tickAll(ctx context.Context) int {
 	trips, err := s.source.Stale(ctx, s.staleAfter, 0, nil)
 	if err != nil {
 		s.log.ErrorContext(ctx, "stale trips query failed", "error", err)
-		return
+		return 0
 	}
+
 	for _, tr := range trips {
 		s.enqueue(ctx, tr)
 	}
 	s.metrics.setQueueSize(ctx, s.queue.Len())
+	return len(trips)
 }
 
-func (s *scanner) tickBatches(ctx context.Context) {
+func (s *scanner) tickBatches(ctx context.Context) int {
 	var after *trip.StaleCursor
+	rowsRead := 0
 	for {
-		trips, err := s.source.Stale(ctx, s.staleAfter, s.batchSize, after)
+		trips, err := s.source.Stale(
+			ctx, s.staleAfter, s.batchSize, after,
+		)
 		if err != nil {
 			s.log.ErrorContext(ctx, "stale trips query failed", "error", err)
-			return
+			return rowsRead
 		}
+		rowsRead += len(trips)
 		if len(trips) == 0 {
-			return
+			return rowsRead
 		}
 		for _, tr := range trips {
 			s.enqueue(ctx, tr)
 		}
 		s.metrics.setQueueSize(ctx, s.queue.Len())
-
 		if s.queue.Len() >= s.queueSize {
-			return
+			return rowsRead
 		}
+
 		last := trips[len(trips)-1]
-		after = &trip.StaleCursor{StaleAt: last.StaleAt, TripID: last.TripID}
+		after = &trip.StaleCursor{
+			StaleAt: last.StaleAt,
+			TripID:  last.TripID,
+		}
+
 		if len(trips) < s.batchSize {
-			return
+			return rowsRead
 		}
 	}
 }
@@ -114,5 +129,10 @@ func (s *scanner) enqueue(ctx context.Context, tr trip.StaleTrip) {
 		s.metrics.staleCheck(ctx, "dropped")
 		s.log.WarnContext(ctx, "positions queue full, trip dropped",
 			"trip_id", tr.TripID.String())
+	case EnqueueEvicted:
+		s.metrics.staleCheck(ctx, "queued")
+		s.metrics.staleCheck(ctx, "dropped")
+		s.log.WarnContext(ctx, "positions queue full, trip evicted",
+			"new_trip_id", tr.TripID.String())
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/mock/gomock"
 
 	"github.com/toooriii/tori/internal/config"
 	"github.com/toooriii/tori/internal/repository/trip"
@@ -29,7 +30,8 @@ func TestComponent_StartStopNoLeak(t *testing.T) {
 		BatchSize:     0,
 	}
 	src := &staticSource{}
-	sender := &fakeSender{}
+	ctrl := gomock.NewController(t)
+	sender := NewMockSender(ctrl)
 	ft := newFakeTicker()
 
 	comp, err := New(cfg, src, sender, nopLogger(), func(time.Duration) Ticker { return ft })
@@ -41,8 +43,10 @@ func TestComponent_StartStopNoLeak(t *testing.T) {
 }
 
 func TestComponent_Cancel(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	sender := NewMockSender(ctrl)
 	cfg := config.Positions{Workers: 1, QueueSize: 10, PushTimeout: time.Second}
-	comp, err := New(cfg, &staticSource{}, &fakeSender{}, nopLogger(), func(time.Duration) Ticker { return newFakeTicker() })
+	comp, err := New(cfg, &staticSource{}, sender, nopLogger(), func(time.Duration) Ticker { return newFakeTicker() })
 	if err != nil {
 		t.Fatal(err)
 	}

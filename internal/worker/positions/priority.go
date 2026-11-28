@@ -47,18 +47,20 @@ func (h *jobHeap) Pop() any {
 }
 
 type priorityQueue struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	h      jobHeap
-	in     map[uuid.UUID]*priorityItem
-	size   int
-	closed bool
+	mu         sync.Mutex
+	cond       *sync.Cond
+	h          jobHeap
+	in         map[uuid.UUID]*priorityItem
+	size       int
+	closed     bool
+	processing map[uuid.UUID]struct{}
 }
 
 func newPriorityQueue(size int) *priorityQueue {
 	q := &priorityQueue{
-		in:   make(map[uuid.UUID]*priorityItem, size),
-		size: size,
+		in:         make(map[uuid.UUID]*priorityItem, size),
+		processing: make(map[uuid.UUID]struct{}),
+		size:       size,
 	}
 	q.cond = sync.NewCond(&q.mu)
 	return q
@@ -74,7 +76,10 @@ func (q *priorityQueue) TryEnqueue(j Job) EnqueueResult {
 	if _, ok := q.in[j.TripID]; ok {
 		return EnqueueDuplicate
 	}
-
+	if _, ok := q.processing[j.TripID]; ok {
+		return EnqueueDuplicate
+	}
+	result := EnqueueQueued
 	if len(q.h) >= q.size {
 		worst := q.worst()
 		if worst == nil || !j.StaleAt.Before(worst.job.StaleAt) {
@@ -82,13 +87,15 @@ func (q *priorityQueue) TryEnqueue(j Job) EnqueueResult {
 		}
 		heap.Remove(&q.h, worst.index)
 		delete(q.in, worst.job.TripID)
+		result = EnqueueEvicted
 	}
 
 	it := &priorityItem{job: j}
 	heap.Push(&q.h, it)
 	q.in[j.TripID] = it
 	q.cond.Signal()
-	return EnqueueQueued
+
+	return result
 }
 
 func (q *priorityQueue) worst() *priorityItem {
@@ -137,6 +144,7 @@ func (q *priorityQueue) Pop(ctx context.Context) (Job, bool) {
 		if len(q.h) > 0 {
 			it := heap.Pop(&q.h).(*priorityItem) //nolint:forcetypeassert
 			delete(q.in, it.job.TripID)
+			q.processing[it.job.TripID] = struct{}{}
 			return it.job, true
 		}
 		q.cond.Wait()
@@ -144,8 +152,10 @@ func (q *priorityQueue) Pop(ctx context.Context) (Job, bool) {
 }
 
 func (q *priorityQueue) Done(j Job) {
-	// В priorityQueue задача удаляется из q.in при Pop,
-	// поэтому Done — no-op. Оставлен для совместимости с интерфейсом.
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	delete(q.processing, j.TripID)
 }
 
 func (q *priorityQueue) Len() int {

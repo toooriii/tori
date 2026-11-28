@@ -136,8 +136,8 @@ func TestPriority_Evict(t *testing.T) {
 	q.TryEnqueue(job(old, now))
 	q.TryEnqueue(job(fresh, now.Add(2*time.Minute)))
 
-	if got := q.TryEnqueue(job(middle, now.Add(time.Minute))); got != EnqueueQueued {
-		t.Fatalf("enqueue middle = %v, want queued", got)
+	if got := q.TryEnqueue(job(middle, now.Add(time.Minute))); got != EnqueueEvicted {
+		t.Fatalf("enqueue middle = %v, want evicted", got)
 	}
 	if q.Len() != 2 {
 		t.Fatalf("len = %d, want 2", q.Len())
@@ -184,5 +184,99 @@ func TestPriority_Cancel(t *testing.T) {
 	defer cancel()
 	if _, ok := q.Pop(ctx); ok {
 		t.Fatal("pop returned a job after cancel")
+	}
+}
+
+func TestFIFO_CancelAndReenqueue(t *testing.T) {
+	q := newFIFOQueue(10)
+	defer q.Close()
+
+	id := uuid.New()
+	now := time.Now()
+
+	oldJob := job(id, now)
+	newJob := job(id, now.Add(time.Minute))
+
+	if got := q.TryEnqueue(oldJob); got != EnqueueQueued {
+		t.Fatalf("first enqueue = %v, want queued", got)
+	}
+	if !q.Cancel(id) {
+		t.Fatal("cancel = false, want true")
+	}
+	if got := q.TryEnqueue(newJob); got != EnqueueQueued {
+		t.Fatalf("second enqueue = %v, want queued", got)
+	}
+	ctx, cancel := context.WithTimeout(
+		context.Background(), time.Second,
+	)
+	defer cancel()
+	got, ok := q.Pop(ctx)
+	if !ok {
+		t.Fatal("expected new job")
+	}
+	if !got.StaleAt.Equal(newJob.StaleAt) {
+		t.Fatalf("got old job: %v, want %v",
+			got.StaleAt, newJob.StaleAt)
+	}
+	q.Done(got)
+	if q.Len() != 0 {
+		t.Fatalf("len = %d, want 0", q.Len())
+	}
+}
+
+func TestFIFO_OldDoneDoesNotRemoveNewJob(t *testing.T) {
+	q := newFIFOQueue(10)
+	defer q.Close()
+	id := uuid.New()
+	now := time.Now()
+	ctx, cancel := context.WithTimeout(
+		context.Background(), time.Second,
+	)
+	defer cancel()
+	q.TryEnqueue(job(id, now))
+	oldJob, ok := q.Pop(ctx)
+	if !ok {
+		t.Fatal("expected old job")
+	}
+	q.Cancel(id)
+	if got := q.TryEnqueue(job(id, now.Add(time.Minute))); got != EnqueueQueued {
+		t.Fatalf("enqueue = %v, want queued", got)
+	}
+	q.Done(oldJob)
+	if q.Len() != 1 {
+		t.Fatalf("len = %d, want 1", q.Len())
+	}
+	newJob, ok := q.Pop(ctx)
+	if !ok {
+		t.Fatal("new job was removed by old Done")
+	}
+	q.Done(newJob)
+}
+
+func TestPriority_DuplicateWhileProcessing(t *testing.T) {
+	q := newPriorityQueue(10)
+	defer q.Close()
+	id := uuid.New()
+	j := job(id, time.Now())
+	if got := q.TryEnqueue(j); got != EnqueueQueued {
+		t.Fatalf("enqueue = %v, want queued", got)
+	}
+	ctx, cancel := context.WithTimeout(
+		context.Background(), time.Second,
+	)
+	defer cancel()
+	current, ok := q.Pop(ctx)
+	if !ok {
+		t.Fatal("expected job")
+	}
+	if got := q.TryEnqueue(j); got != EnqueueDuplicate {
+		t.Fatalf("enqueue while processing = %v, want duplicate", got)
+	}
+	if got := q.Len(); got != 0 {
+		t.Fatalf("queue len = %d, want 0", got)
+	}
+	q.Done(current)
+	if got := q.TryEnqueue(j); got != EnqueueQueued {
+		t.Fatalf("enqueue after Done = %v, want queued", got)
 	}
 }

@@ -1,4 +1,4 @@
-//go:generate mockgen -source ${GOFILE} -destination mocks_test.go -package ${GOPACKAGE}_test
+//go:generate mockgen -source=contract.go -destination=mocks_test.go -package=positions
 
 package positions
 
@@ -12,9 +12,10 @@ import (
 )
 
 type Job struct {
-	TripID   uuid.UUID
-	DriverID uuid.UUID
-	StaleAt  time.Time
+	TripID     uuid.UUID
+	DriverID   uuid.UUID
+	StaleAt    time.Time
+	generation uint64
 }
 
 type Sender interface {
@@ -49,4 +50,5 @@ const (
 	EnqueueQueued EnqueueResult = iota
 	EnqueueDuplicate
 	EnqueueDropped
+	EnqueueEvicted
 )

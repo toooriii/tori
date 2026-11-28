@@ -83,7 +83,7 @@ func Load() (Config, error) {
 			QueueSize:     l.int("POSITION_QUEUE_SIZE", 100),
 			PushURL:       l.required("PUSH_HTTP_URL"),
 			PushTimeout:   l.dur("PUSH_REQUEST_TIMEOUT", time.Second),
-			BatchSize:     l.int("POSITION_BATCH_SIZE", 0),
+			BatchSize:     l.int("POSITION_BATCH_SIZE", 100),
 			PriorityQueue: l.bool("POSITION_PRIORITY_QUEUE", false),
 		},
 	}
@@ -101,7 +101,7 @@ func Load() (Config, error) {
 		l.errs = append(l.errs, errors.New("POSITION_QUEUE_SIZE must be >= 1"))
 	}
 	if cfg.Positions.BatchSize < 0 {
-		l.errs = append(l.errs, errors.New("POSITION_BATCH_SIZE must be >= 0"))
+		l.errs = append(l.errs, errors.New("POSITION_SCAN_BATCH_SIZE must be >= 0"))
 	}
 
 	if cfg.Database.MinConns < 0 || cfg.Database.MinConns > cfg.Database.MaxConns {

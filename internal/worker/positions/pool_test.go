@@ -4,148 +4,188 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/mock/gomock"
 )
-
-type fakeSender struct {
-	calls   atomic.Int64
-	mu      sync.Mutex
-	respond func(tripID uuid.UUID) error
-}
-
-func (f *fakeSender) SendRequestPosition(_ context.Context, tripID, _ uuid.UUID) error {
-	f.calls.Add(1)
-	if f.respond != nil {
-		f.mu.Lock()
-		fn := f.respond
-		f.mu.Unlock()
-		return fn(tripID)
-	}
-	return nil
-}
 
 func TestPool_ProcessesAll(t *testing.T) {
 	q := newFIFOQueue(100)
 	defer q.Close()
 
 	const n = 20
+	ctrl := gomock.NewController(t)
+	sender := NewMockSender(ctrl)
 	for i := 0; i < n; i++ {
-		q.TryEnqueue(job(uuid.New(), time.Now()))
-	}
+		j := job(uuid.New(), time.Now())
 
-	sender := &fakeSender{}
-	m, _ := newMetrics()
+		if got := q.TryEnqueue(j); got != EnqueueQueued {
+			t.Fatalf("enqueue = %v, want queued", got)
+		}
+		sender.EXPECT().
+			SendRequestPosition(gomock.Any(), j.TripID, j.DriverID).
+			Return(nil).
+			Times(1)
+	}
+	m, err := newMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
 	p := newPool(q, sender, nopLogger(), m, 4, time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	p.start(ctx)
-
-	waitFor(t, func() bool { return q.Len() == 0 && sender.calls.Load() == n })
 	q.Close()
-	cancel()
 	waitDone(t, &p.wg)
+
+	if got := q.Len(); got != 0 {
+		t.Fatalf("queue len = %d, want 0", got)
+	}
 }
 
 func TestPool_SenderErrorDoesNotKillWorker(t *testing.T) {
 	q := newFIFOQueue(10)
 	defer q.Close()
 
-	var once sync.Once
-	sender := &fakeSender{}
-	sender.respond = func(uuid.UUID) error {
-		var err error
-		once.Do(func() { err = errors.New("boom") })
-		return err
+	ctrl := gomock.NewController(t)
+	sender := NewMockSender(ctrl)
+
+	gomock.InOrder(
+		sender.EXPECT().
+			SendRequestPosition(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(errors.New("boom")),
+
+		sender.EXPECT().
+			SendRequestPosition(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil),
+
+		sender.EXPECT().
+			SendRequestPosition(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil),
+	)
+
+	for i := 0; i < 3; i++ {
+		if got := q.TryEnqueue(job(uuid.New(), time.Now())); got != EnqueueQueued {
+			t.Fatalf("enqueue = %v, want queued", got)
+		}
 	}
-	q.TryEnqueue(job(uuid.New(), time.Now()))
-	q.TryEnqueue(job(uuid.New(), time.Now()))
-	q.TryEnqueue(job(uuid.New(), time.Now()))
-
-	m, _ := newMetrics()
-	p := newPool(q, sender, nopLogger(), m, 2, time.Second)
+	m, err := newMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := newPool(q, sender, nopLogger(), m, 1, time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	p.start(ctx)
-
-	waitFor(t, func() bool { return sender.calls.Load() == 3 })
 	q.Close()
-	cancel()
 	waitDone(t, &p.wg)
+	if got := q.Len(); got != 0 {
+		t.Fatalf("queue len = %d, want 0", got)
+	}
 }
 
 func TestPool_CancelBeforePop(t *testing.T) {
 	q := newFIFOQueue(10)
 	defer q.Close()
-
 	id := uuid.New()
-	q.TryEnqueue(job(id, time.Now()))
-	q.Cancel(id)
+	if got := q.TryEnqueue(job(id, time.Now())); got != EnqueueQueued {
+		t.Fatalf("enqueue = %v, want queued", got)
+	}
+	if !q.Cancel(id) {
+		t.Fatal("cancel = false, want true")
+	}
+	ctrl := gomock.NewController(t)
+	sender := NewMockSender(ctrl)
 
-	sender := &fakeSender{}
-	m, _ := newMetrics()
+	sender.EXPECT().
+		SendRequestPosition(gomock.Any(), gomock.Any(), gomock.Any()).
+		Times(0)
+
+	m, err := newMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
 	p := newPool(q, sender, nopLogger(), m, 2, time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	p.start(ctx)
-
 	q.Close()
-	cancel()
 	waitDone(t, &p.wg)
-	if sender.calls.Load() != 0 {
-		t.Fatalf("sender called %d times, want 0", sender.calls.Load())
-	}
 }
 
 func TestPool_Timeout(t *testing.T) {
 	q := newFIFOQueue(1)
 	defer q.Close()
-
-	q.TryEnqueue(job(uuid.New(), time.Now()))
-	sender := &fakeSender{}
-	sender.respond = func(uuid.UUID) error {
-		time.Sleep(50 * time.Millisecond)
-		return context.DeadlineExceeded
+	j := job(uuid.New(), time.Now())
+	if got := q.TryEnqueue(j); got != EnqueueQueued {
+		t.Fatalf("enqueue = %v, want queued", got)
 	}
-	m, _ := newMetrics()
+	ctrl := gomock.NewController(t)
+	sender := NewMockSender(ctrl)
+	result := make(chan error, 1)
+	sender.EXPECT().
+		SendRequestPosition(gomock.Any(), j.TripID, j.DriverID).
+		DoAndReturn(func(ctx context.Context, _, _ uuid.UUID) error {
+			<-ctx.Done()
+			err := ctx.Err()
+			result <- err
+			return err
+		}).
+		Times(1)
+	m, err := newMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
 	p := newPool(q, sender, nopLogger(), m, 1, 10*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	p.start(ctx)
-
-	waitFor(t, func() bool { return sender.calls.Load() == 1 })
 	q.Close()
-	cancel()
 	waitDone(t, &p.wg)
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("error = %v, want DeadlineExceeded", err)
+		}
+	default:
+		t.Fatal("sender did not report timeout")
+	}
 }
 
 func TestPool_SpanLink(t *testing.T) {
 	q := newFIFOQueue(1)
 	defer q.Close()
-
-	q.TryEnqueue(job(uuid.New(), time.Now()))
-
-	var gotDeadline bool
-	sender := &fakeSender{}
-	sender.respond = func(uuid.UUID) error {
-		return nil
+	j := job(uuid.New(), time.Now())
+	if got := q.TryEnqueue(j); got != EnqueueQueued {
+		t.Fatalf("enqueue = %v, want queued", got)
 	}
-	_ = gotDeadline
-
-	m, _ := newMetrics()
+	ctrl := gomock.NewController(t)
+	sender := NewMockSender(ctrl)
+	sender.EXPECT().
+		SendRequestPosition(gomock.Any(), j.TripID, j.DriverID).
+		Return(nil).
+		Times(1)
+	m, err := newMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
 	p := newPool(q, sender, nopLogger(), m, 1, time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	p.start(ctx)
-
-	waitFor(t, func() bool { return sender.calls.Load() == 1 })
 	q.Close()
-	cancel()
 	waitDone(t, &p.wg)
 }
 
 func waitDone(t *testing.T, wg *sync.WaitGroup) {
 	t.Helper()
 	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):

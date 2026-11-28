@@ -15,6 +15,7 @@ type metrics struct {
 	workersActive   metric.Int64UpDownCounter
 	requests        metric.Int64Counter
 	requestDuration metric.Float64Histogram
+	rowsRead        metric.Int64Histogram
 }
 
 func newMetrics() (*metrics, error) {
@@ -48,9 +49,20 @@ func newMetrics() (*metrics, error) {
 		return nil, err
 	}
 
-	requestDuration, err := m.Float64Histogram("tripgo.position_requests.duration",
+	requestDuration, err := m.Float64Histogram(
+		"tripgo.position_requests.duration",
 		metric.WithUnit("s"),
-		metric.WithDescription("Duration of a position request to Push Service"))
+		metric.WithDescription("Duration of a position request to Push Service"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	rowsRead, err := m.Int64Histogram(
+		"tripgo.stale_checks.rows_read",
+		metric.WithUnit("{row}"),
+		metric.WithDescription("Total rows read per scanner tick"),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +73,7 @@ func newMetrics() (*metrics, error) {
 		workersActive:   workersActive,
 		requests:        requests,
 		requestDuration: requestDuration,
+		rowsRead:        rowsRead,
 	}, nil
 }
 
@@ -83,4 +96,8 @@ func (m *metrics) workerFinished(ctx context.Context) {
 func (m *metrics) request(ctx context.Context, result string, d time.Duration) {
 	m.requests.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
 	m.requestDuration.Record(ctx, d.Seconds(), metric.WithAttributes(attribute.String("result", result)))
+}
+
+func (m *metrics) recordRowsRead(ctx context.Context, n int) {
+	m.rowsRead.Record(ctx, int64(n))
 }
